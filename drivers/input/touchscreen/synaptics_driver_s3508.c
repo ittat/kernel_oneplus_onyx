@@ -63,8 +63,6 @@ static int LCD_HEIGHT ;
 
 #define IMAGE_AREA_OFFSET 0x100
 
-#define SUPPORT_VIRTUAL_KEY
-
 //#define KEY_USE
 
 //#define SUPPORT_14017
@@ -194,9 +192,6 @@ static int force_update = 0;
 static int tp_probe_ok = 0;
 static atomic_t is_touch;
 static atomic_t is_key_touch;
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-static int touchkey_wait_time = 45;
-#endif
 
 static DEFINE_SEMAPHORE(work_sem);
 //static int DiagonalUpperLimit = 1100;
@@ -207,7 +202,6 @@ static struct workqueue_struct *synaptics_wq = NULL;
 static struct workqueue_struct *speedup_resume_wq = NULL;
 static struct proc_dir_entry *prEntry_tp = NULL;
 static struct proc_dir_entry *prEntry_tpreset = NULL;
-static struct proc_dir_entry *prEntry_tp_proc = NULL;
 
 #ifdef SUPPORT_TP_SLEEP_MODE
 	static atomic_t sleep_enable;
@@ -413,7 +407,6 @@ static void synaptics_ts_probe_func(struct work_struct *w)
 static int oem_synaptics_ts_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 	int i;
-       int offline_times = 0;//add by jiachenghui for only one cpu online,2015-9-28
 	//unsigned long flags;
 	//spinlock_t oem_lock;
 	optimize_data.client = client;
@@ -431,7 +424,6 @@ static int oem_synaptics_ts_probe(struct i2c_client *client, const struct i2c_de
                       printk("boot_time: [synaptics_ts_probe] CPU%d is %s\n",i,cpu_is_offline(i)?"offline":"online");
 			 if (cpu_is_offline(i) || i == smp_processor_id())
                       {
-                            offline_times ++;//add by jiachenghui for only one cpu online,2015-9-28
                            continue;
                       }
 			queue_delayed_work_on(i,optimize_data.workqueue,&(optimize_data.work),msecs_to_jiffies(300));
@@ -445,10 +437,6 @@ static int oem_synaptics_ts_probe(struct i2c_client *client, const struct i2c_de
 	}
 	//flush_workqueue(optimize_data.workqueue);
 	//spin_unlock_irqrestore(&oem_lock, flags);
-	//add by jiachenghui for only one cpu online,2015-9-28
-	if(offline_times == 4)
-		queue_delayed_work_on(smp_processor_id(),optimize_data.workqueue,&(optimize_data.work),msecs_to_jiffies(300));
-       //add by jiachenghui for only one cpu online,2015-9-28
 	return probe_ret;
 }
 #endif /*VENDOR_EDIT*/
@@ -552,7 +540,7 @@ static struct device_attribute attrs_oppo[] = {
 static ssize_t cap_vk_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf){
       /* LEFT: search: CENTER: menu ,home:search 412, RIGHT: BACK */
 	return sprintf(buf,
-        	__stringify(EV_KEY) ":" __stringify(KEY_APPSELECT)   ":%d:%d:%d:%d"
+        	__stringify(EV_KEY) ":" __stringify(KEY_MENU)   ":%d:%d:%d:%d"
         ":" __stringify(EV_KEY) ":" __stringify(KEY_HOMEPAGE)   ":%d:%d:%d:%d"
         ":" __stringify(EV_KEY) ":" __stringify(KEY_BACK)   ":%d:%d:%d:%d"
         "\n",LCD_WIDTH/6,button_map[2],button_map[0],button_map[1],LCD_WIDTH/2,button_map[2],button_map[0],button_map[1],LCD_WIDTH*5/6,button_map[2],button_map[0],button_map[1]);
@@ -1650,23 +1638,8 @@ static void int_touch_s3203(struct synaptics_ts_data *ts)
 }
 #endif
 
-#ifdef VENDOR_EDIT //WayneChang, 2015/11/13, Change MENU key to APPSELECT key
-#define REP_KEY_APPSELECT (atomic_read(&key_reverse)?(KEY_BACK):(KEY_APPSELECT))
-#define REP_KEY_BACK (atomic_read(&key_reverse)?(KEY_APPSELECT):(KEY_BACK))
-#else
 #define REP_KEY_MENU (atomic_read(&key_reverse)?(KEY_BACK):(KEY_MENU))
 #define REP_KEY_BACK (atomic_read(&key_reverse)?(KEY_MENU):(KEY_BACK))
-#endif
-
-#ifdef VENDOR_EDIT
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-struct completion key_cm;
-bool key_back_pressed = 0;
-bool key_appselect_pressed = 0;
-bool key_home_pressed = 0;
-bool virtual_key_enable = false;
-#endif
-#endif
 
 static bool insert_point =0;//for swipe the control panel
 static void int_touch_s3508(struct synaptics_ts_data *ts,bool insert_flag)
@@ -1676,14 +1649,7 @@ static void int_touch_s3508(struct synaptics_ts_data *ts,bool insert_flag)
     uint32_t finger_state = 0;
 	uint8_t finger_num = 0;
 	int obj_attention =0;
-	uint8_t finger_status = 0;
-        bool valid_event = 0;
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-	bool key_appselect_check = false;
-	bool key_back_check = false;
-	bool key_home_check = false;
-	bool key_pressed = key_appselect_pressed || key_back_pressed || key_home_pressed;
-#endif
+
 
     struct point_info points;
 
@@ -1695,11 +1661,7 @@ static void int_touch_s3508(struct synaptics_ts_data *ts,bool insert_flag)
 	points.z = 0;
 
 		obj_attention = i2c_smbus_read_word_data(ts->client, F12_2D_DATA_BASE+0x03);
-		valid_event = ((obj_attention&0x03FF) != 0) ;
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-		valid_event = valid_event || key_pressed;
-#endif
-	if( valid_event){
+	if( (obj_attention&0x03FF) != 0 ){
 			ret = synaptics_rmi4_i2c_read(ts, F12_2D_DATA_BASE, buf, 80);
 
 		if (ret < 0) {
@@ -1722,50 +1684,7 @@ static void int_touch_s3508(struct synaptics_ts_data *ts,bool insert_flag)
 				points.z = buf[i*8+5];
                         //buf[i*8]: Object Type and Status ,if it is 0 , do not
                         // report data. shankai@bsp , 2015-9-22
-				finger_status = (((obj_attention&0x03FF) >> i )&0x01)&&(buf[i*8] != 0);
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-			    if(virtual_key_enable){
-				if(points.y > 0x780 && key_pressed){
-				        TPD_DEBUG("Drop TP event due to key pressed\n");
-				        finger_status = 0;
-			   	 }
-			    }
-			    if(virtual_key_enable){
-				    if (!finger_status){
-				        if (key_appselect_pressed && !key_appselect_check){
-				            points.x = 0xb5;
-				            points.y = 0x7e5;
-				            points.z = 0x33;
-				            points.raw_x = 4;
-				            points.raw_y = 6;
-				            key_appselect_check = true;
-				            //points.status = 1;
-				            finger_status =  true;
-				        }else if (key_back_pressed && !key_back_check){
-				            points.x = 0x3E8;
-				            points.y = 0x7e5;
-				            points.z = 0x33;
-				            points.raw_x = 4;
-				            points.raw_y = 6;
-				            key_back_check = true;
-				            //points.status = 1;
-				            finger_status =  true;
-				        }else if(key_home_pressed && !key_home_check){
-				            points.x = 0x280;
-				            points.y = 0x7e5;
-				            points.z = 0x33;
-				            points.raw_x = 4;
-				            points.raw_y = 6;
-				            key_home_check = true;
-				            //points.status = 1;
-				            finger_status =  true;
-				        }else{
-				            //TPD_DEBUG(" finger %d with !finger_statue and no key match\n",i);
-				        }
-				    }
-			    }
-#endif
-				if(finger_status){
+				if((((obj_attention&0x03FF) >> i )&0x01)&&(buf[i*8] != 0)){
 				//if(points.z > 0){
 
 #ifdef TYPE_B_PROTOCOL
@@ -1796,11 +1715,6 @@ static void int_touch_s3508(struct synaptics_ts_data *ts,bool insert_flag)
 					}
 #endif
 					tpd_down(ts, points.raw_x, points.raw_y, points.x, points.y, points.z);
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-				    if(virtual_key_enable){
-					complete(&key_cm);
-				    }
-#endif
 					finger_num++;
 
 				}
@@ -1856,20 +1770,12 @@ static void int_key_report_s3508(struct synaptics_ts_data *ts)
 			if((ret & 0x01) && !(ts->pre_btn_state & 0x01))//menu
 			{
 				if( 0 == atomic_read(&is_touch) ){
-					#ifdef VENDOR_EDIT //shankai, 2016/06/07, Change MENU key to APPSELECT key
-					input_report_key(ts->input_dev, REP_KEY_APPSELECT, 1);
-					#else
 					input_report_key(ts->input_dev, REP_KEY_MENU, 1);
-					#endif  
 					input_sync(ts->input_dev);
-                     atomic_set(&is_key_touch, 1);
+                                   atomic_set(&is_key_touch, 1);
 				}
 			}else if(!(ret & 0x01) && (ts->pre_btn_state & 0x01)){
-				#ifdef VENDOR_EDIT //shankai, 2016/06/07, Change MENU key to APPSELECT key
-				input_report_key(ts->input_dev, REP_KEY_APPSELECT, 0);
-				#else
 				input_report_key(ts->input_dev, REP_KEY_MENU, 0);
-				#endif
 				input_sync(ts->input_dev);
                             atomic_set(&is_key_touch, 0);
 			}
@@ -1907,87 +1813,6 @@ static void int_key_report_s3508(struct synaptics_ts_data *ts)
 	input_sync(ts->input_dev);
 	i2c_smbus_write_byte_data(ts->client, 0xff, 0x0);
 }
-
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-static void int_virtual_key_report_s3508(struct synaptics_ts_data *ts)
-{
-    	int ret= 0;
-	long time =0 ;
-	int F1A_0D_DATA00=0x00;
-	int F51_CUSTOM_DATA32=0x19;
-
-	bool key_up_report = false;
-
-	TPD_DEBUG("%s is called!\n",__func__);
-	if(is_gesture_enable == 1)
-	{
-			i2c_smbus_write_byte_data(ts->client, 0xff, 0x04);
-			ret = i2c_smbus_read_byte_data(ts->client, F51_CUSTOM_DATA32);
-			if( (ret & 0x07) != 0 ){
-				gesture = DouTap;
-				input_report_key(ts->input_dev, KEY_F4, 1);
-				input_sync(ts->input_dev);
-				input_report_key(ts->input_dev, KEY_F4, 0);
-				input_sync(ts->input_dev);
-			}
-
-	}else{
-			i2c_smbus_write_byte_data(ts->client, 0xff, 0x02);
-			ret = i2c_smbus_read_byte_data(ts->client, F1A_0D_DATA00);
-			if((ret & 0x01) && !(ts->pre_btn_state & 0x01))//menu
-			{
-				if( 0 == atomic_read(&is_touch) ){
-					key_appselect_pressed = 1;
-		                        atomic_set(&is_key_touch, 1);
-				}
-			}else if(!(ret & 0x01) && (ts->pre_btn_state & 0x01)){
-				key_appselect_pressed = 0;
-				key_up_report = true;
-                            	atomic_set(&is_key_touch, 0);
-			}
-
-			if((ret & 0x02) && !(ts->pre_btn_state & 0x02))//home
-			{
-				if( 0 == atomic_read(&is_touch) ){
-					key_home_pressed = 1;
-					atomic_set(&is_key_touch, 1);
-				}
-
-			}else if(!(ret & 0x02) && (ts->pre_btn_state & 0x02)){
-				key_home_pressed = 0;
-				key_up_report = true;
-	                        atomic_set(&is_key_touch, 0);
-			}
-
-			if((ret & 0x04) && !(ts->pre_btn_state & 0x04))//reback
-			{
-				if( 0 == atomic_read(&is_touch) ){
-				   key_back_pressed = 1;
-                                   atomic_set(&is_key_touch, 1);
-				}
-			}else if(!(ret & 0x04) && (ts->pre_btn_state & 0x04)){
-			    key_back_pressed = 0;
-			    key_up_report = true;
-                            atomic_set(&is_key_touch, 0);
-			}
-
-	}
-
-	ts->pre_btn_state = ret & 0x07;
-	i2c_smbus_write_byte_data(ts->client, 0xff, 0x0);
-	    if(key_up_report){
-		INIT_COMPLETION(key_cm);
-		time = wait_for_completion_timeout(&key_cm,msecs_to_jiffies(touchkey_wait_time));
-		if (!time){
-			int_touch_s3508(ts,false);
-		}
-	    }else{
-		int_touch_s3508(ts,false);
-	    }
-}
-#endif
-
-
 #if 0
 static int ts_gpio_pinctrl_init(struct synaptics_ts_data *ts)
 {
@@ -2108,15 +1933,7 @@ static void synaptics_ts_work_func(struct work_struct *work)
 		}
 
 		if( inte & 0x10 ) {
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-                        if(virtual_key_enable){
-				int_virtual_key_report_s3508(ts);
-			}else{
-#endif
-				int_key_report_s3508(ts);
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-			}
-#endif
+			int_key_report_s3508(ts);
 		}
 
 
@@ -3626,7 +3443,6 @@ static int	synaptics_input_init(struct synaptics_ts_data *ts)
 	set_bit(ABS_MT_POSITION_X, ts->input_dev->absbit);
 	set_bit(ABS_MT_POSITION_Y, ts->input_dev->absbit);
 	set_bit(INPUT_PROP_DIRECT, ts->input_dev->propbit);
-	
 
 #ifdef SUPPORT_GESTURE
 	set_bit(KEY_F4 , ts->input_dev->keybit);//doulbe-tap resume
@@ -3647,11 +3463,7 @@ static int	synaptics_input_init(struct synaptics_ts_data *ts)
 #endif
 	set_bit(BTN_TOUCH, ts->input_dev->keybit);
 	set_bit(KEY_SEARCH, ts->input_dev->keybit);
-	#ifdef VENDOR_EDIT //shankai, 2016/6/7, Change MENU key to APPSELECT key
-    set_bit(KEY_APPSELECT, ts->input_dev->keybit);
-	#else
 	set_bit(KEY_MENU, ts->input_dev->keybit);
-	#endif
 	set_bit(KEY_HOME, ts->input_dev->keybit);
 	set_bit(KEY_BACK, ts->input_dev->keybit);
 	input_set_drvdata(ts->input_dev, ts);
@@ -3953,39 +3765,6 @@ static int tp_key_reverse_write_func(struct file *file, const char __user *buffe
 
 	return count;
 }
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-static int tp_virtual_key_enable_read_func(struct file *file, char __user *user_buf, size_t count, loff_t *ppos)
-{
-	int ret = 0;
-	char page[PAGESIZE];
-	TPD_DEBUG("virtual key is %s\n",virtual_key_enable? "enable":"disable");
-	ret = sprintf(page, "%d\n", atomic_read(&key_reverse));
-	ret = simple_read_from_buffer(user_buf, count, ppos, page, strlen(page));
-	return ret;
-}
-
-static int tp_virtual_key_enable_write_func(struct file *file, const char __user *buffer, size_t count, loff_t *ppos)
-{
-	int ret = 0;
-	char buf[10];
-	if( count > 2)
-		return count;
-	if( copy_from_user(buf, buffer, count) ){
-		printk(KERN_INFO "%s: read proc input error.\n", __func__);
-		return count;
-	}
-
-	sscanf(buf, "%d", &ret);
-       TPD_ERR("%s val:%d \n", __func__, ret);
-	if(ret == 1){
-		virtual_key_enable = true;
-	}else{
-		virtual_key_enable = false;
-	}
-
-	return count;
-}
-#endif
 // chenggang.li@BSP.TP modified for oppo 2014-08-08 create node
 /******************************start****************************/
 static const struct file_operations tp_double_proc_fops = {
@@ -4061,14 +3840,6 @@ static const struct file_operations tp_key_reverse_proc_fops = {
 	.open = simple_open,
 	.owner = THIS_MODULE,
 };
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-static const struct file_operations tp_virtual_key_enable_proc_fops = {
-	.write = tp_virtual_key_enable_write_func,
-	.read =  tp_virtual_key_enable_read_func,
-	.open = simple_open,
-	.owner = THIS_MODULE,
-};
-#endif
 static int init_synaptics_proc(void)
 {
 	int ret = 0;
@@ -4142,23 +3913,18 @@ static int init_synaptics_proc(void)
 		ret = -ENOMEM;
 		printk(KERN_INFO"init_synaptics_proc: Couldn't create proc entry\n");
 	}
-	prEntry_tp_proc = proc_mkdir("s1302", NULL);
+	prEntry_tp = proc_mkdir("s1302", NULL);
 	if( prEntry_tp == NULL ){
 		ret = -ENOMEM;
 		printk(KERN_INFO"init_synaptics_proc: Couldn't create TP proc entry\n");
 	}
-	prEntry_tp = proc_create( "key_rep", 0666, prEntry_tp_proc, &tp_key_reverse_proc_fops);
+	prEntry_tp = proc_create( "key_rep", 0666, prEntry_tp, &tp_key_reverse_proc_fops);
 	if(prEntry_tp == NULL){
 		ret = -ENOMEM;
 		printk(KERN_INFO"init_synaptics_proc: Couldn't create proc entry\n");
 	}
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-	prEntry_tp = proc_create( "virtual_key", 0666, prEntry_tp_proc, &tp_virtual_key_enable_proc_fops);
-	if(prEntry_tp == NULL){
-		ret = -ENOMEM;
-		printk(KERN_INFO"init_synaptics_proc: Couldn't create proc entry\n");
-	}
-#endif
+
+
 
 	return ret;
 }
@@ -4719,10 +4485,6 @@ static int synaptics_ts_probe(
 	is_gesture_enable = 0;
 #endif
 
-#ifdef SUPPORT_VIRTUAL_KEY //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
-	init_completion(&key_cm);
-#endif
-
 	ret = tpd_power(ts, 1);
 	if( ret < 0 )
 		TPD_ERR("regulator_enable is called\n");
@@ -5092,7 +4854,7 @@ static void speedup_synaptics_resume(struct work_struct *work)
 {
 	int ret;
 	uint8_t buf[6];
-	int i;
+	//int i;
 	struct synaptics_ts_data *ts = ts_g;
 	TPD_ERR("%s is called\n", __func__);
 /***********report Up key when resume********/
@@ -5104,28 +4866,9 @@ static void speedup_synaptics_resume(struct work_struct *work)
 	}
 	gesture_enable = 0;
 	input_report_key(ts_g->input_dev, BTN_TOUCH, 0);
-#ifdef VENDOR_EDIT  // shankai@bsp , 2016-6-6,try to  relase all the key when tp resume
-	for (i = 0; i < ts_g->max_num; i++)
-	{
-
-		input_mt_slot(ts_g->input_dev, i);
-
-		input_mt_report_slot_state(ts_g->input_dev, MT_TOOL_FINGER, 1);
-
-		input_mt_slot(ts_g->input_dev, i);
-
-		input_mt_report_slot_state(ts_g->input_dev, MT_TOOL_FINGER, 0);
-
-	}
-#endif
 #ifndef TYPE_B_PROTOCOL
     input_mt_sync(ts_g->input_dev);
 #endif
-#ifdef VENDOR_EDIT  // shankai@bsp , 2016-6-6,try to  relase all the key when tp resume
-        input_report_key(ts_g->input_dev, BTN_TOOL_FINGER, 0);
-#endif
-
-
 	input_sync(ts_g->input_dev);
 	ts->pre_btn_state = 0;
 
@@ -5227,10 +4970,6 @@ if( ts_g->reset_gpio > 0 )
 		goto ERR_RESUME;
 	}
 	is_suspend = 0;
-	key_appselect_pressed = 0;
-	key_home_pressed = 0;
- 	key_back_pressed = 0;
-
     TPD_ERR("%s:normal end!\n", __func__);
 	up(&work_sem);
 	return;
