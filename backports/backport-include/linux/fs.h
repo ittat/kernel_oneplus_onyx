@@ -13,6 +13,7 @@
 extern int simple_open(struct inode *inode, struct file *file);
 #endif
 
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0)
 /**
  * backport of:
@@ -23,10 +24,11 @@ extern int simple_open(struct inode *inode, struct file *file);
  *
  *     new helper: file_inode(file)
  */
-static inline struct inode *file_inode(struct file *f)
-{
-	return f->f_path.dentry->d_inode;
-}
+
+//static inline struct inode *file_inode(struct file *f)
+//{
+//	return f->f_path.dentry->d_inode;
+//}
 #endif
 
 #ifndef replace_fops

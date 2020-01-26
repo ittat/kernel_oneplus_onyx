@@ -5,7 +5,7 @@
 
 #if defined(CONFIG_BACKPORT_BPAUTO_BUILD_DMA_SHARED_HELPERS)
 #define dma_common_get_sgtable LINUX_BACKPORT(dma_common_get_sgtable)
-int
+extern int
 dma_common_get_sgtable(struct device *dev, struct sg_table *sgt,
 		       void *cpu_addr, dma_addr_t dma_addr, size_t size);
 #endif /* defined(CONFIG_BACKPORT_BPAUTO_BUILD_DMA_SHARED_HELPERS) */
